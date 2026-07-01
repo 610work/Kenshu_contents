@@ -15,6 +15,21 @@
   h1{font-size:15px;margin:0 0 12px;color:#555;letter-spacing:.02em;}
   .frame{position:relative;width:100%;aspect-ratio:16/9;background:#000;overflow:hidden;flex:1;}
   .frame iframe{width:100%;height:100%;border:0;}
+  /* YouTube IFrame API が生成する内部iframeにはクリック可能なリンクが無いので、
+     プレイヤー本体の上に透明の防止レイヤーは不要。操作は下の自作バーのみで行う。 */
+  #yt-player-target{width:100%;height:100%;pointer-events:none;}
+  .controls{
+    display:flex;align-items:center;gap:12px;
+    background:#111;padding:10px 14px;
+  }
+  .controls button{
+    background:none;border:none;color:#fff;cursor:pointer;padding:4px;
+    font-size:16px;line-height:1;display:flex;align-items:center;
+  }
+  .controls button:hover{color:var(--accent);}
+  .seek{flex:1;display:flex;align-items:center;gap:10px;}
+  .seek input[type=range]{flex:1;accent-color:var(--accent);}
+  .time{color:#bbb;font-size:12px;font-family:monospace;min-width:88px;text-align:center;}
   .note{margin-top:10px;font-size:12px;color:#888;}
   .blocked{text-align:center;padding:60px 20px;}
   .blocked p{font-size:14px;color:#555;margin-bottom:20px;}
@@ -26,12 +41,147 @@
   <div class="wrap" id="content"></div>
 
 <script>
+  let ytPlayer = null;
+  let ytApiReady = false;
+  let pendingSession = null;
+
   function block(message) {
     document.getElementById("content").innerHTML = `
       <div class="blocked">
         <p>${message}</p>
         <a href="gallery.html">コンテンツ一覧へ戻る</a>
       </div>
+    `;
+  }
+
+  function formatTime(sec) {
+    sec = Math.max(0, Math.floor(sec || 0));
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}:${String(s).padStart(2, "0")}`;
+  }
+
+  function renderYoutube(session) {
+    const wrap = document.getElementById("content");
+    wrap.innerHTML = `
+      <h1>${session.title || "研修動画"}</h1>
+      <div class="frame">
+        <div id="yt-player-target"></div>
+      </div>
+      <div class="controls">
+        <button id="playPauseBtn" aria-label="再生・一時停止">▶</button>
+        <div class="seek">
+          <input type="range" id="seekBar" value="0" min="0" max="100" step="0.1">
+        </div>
+        <div class="time" id="timeLabel">0:00 / 0:00</div>
+        <button id="muteBtn" aria-label="ミュート">🔊</button>
+      </div>
+      <div class="note">このページを離れると再度コードが必要になります。動画のタイトル部分など、外部（YouTube）へ移動するリンクは無効化しています。</div>
+    `;
+
+    if (ytApiReady) {
+      createYtPlayer(session.videoId);
+    } else {
+      pendingSession = session;
+    }
+  }
+
+  function createYtPlayer(videoId) {
+    ytPlayer = new YT.Player("yt-player-target", {
+      videoId: videoId,
+      playerVars: {
+        autoplay: 1,
+        controls: 0,       // 標準コントロール（タイトル・チャンネルリンクを含む）を非表示
+        disablekb: 1,       // キーボード操作でのショートカット無効化
+        fs: 0,               // フルスクリーンボタン非表示
+        modestbranding: 1,
+        rel: 0,
+        iv_load_policy: 3,
+        playsinline: 1,
+      },
+      events: {
+        onReady: onPlayerReady,
+        onStateChange: onPlayerStateChange,
+      },
+    });
+  }
+
+  function onPlayerReady() {
+    document.getElementById("yt-player-target").style.pointerEvents = "none";
+    startProgressLoop();
+  }
+
+  function onPlayerStateChange(e) {
+    const btn = document.getElementById("playPauseBtn");
+    if (!btn) return;
+    btn.textContent = e.data === YT.PlayerState.PLAYING ? "❚❚" : "▶";
+  }
+
+  function startProgressLoop() {
+    setInterval(() => {
+      if (!ytPlayer || typeof ytPlayer.getCurrentTime !== "function") return;
+      const cur = ytPlayer.getCurrentTime();
+      const dur = ytPlayer.getDuration();
+      const seekBar = document.getElementById("seekBar");
+      const timeLabel = document.getElementById("timeLabel");
+      if (seekBar && dur > 0 && !seekBar.dataset.dragging) {
+        seekBar.max = dur;
+        seekBar.value = cur;
+      }
+      if (timeLabel) {
+        timeLabel.textContent = `${formatTime(cur)} / ${formatTime(dur)}`;
+      }
+    }, 400);
+  }
+
+  document.addEventListener("click", (e) => {
+    if (e.target.id === "playPauseBtn") {
+      if (!ytPlayer) return;
+      const state = ytPlayer.getPlayerState();
+      if (state === YT.PlayerState.PLAYING) ytPlayer.pauseVideo();
+      else ytPlayer.playVideo();
+    }
+    if (e.target.id === "muteBtn") {
+      if (!ytPlayer) return;
+      if (ytPlayer.isMuted()) {
+        ytPlayer.unMute();
+        e.target.textContent = "🔊";
+      } else {
+        ytPlayer.mute();
+        e.target.textContent = "🔇";
+      }
+    }
+  });
+
+  document.addEventListener("input", (e) => {
+    if (e.target.id === "seekBar") {
+      e.target.dataset.dragging = "1";
+    }
+  });
+  document.addEventListener("change", (e) => {
+    if (e.target.id === "seekBar" && ytPlayer) {
+      ytPlayer.seekTo(parseFloat(e.target.value), true);
+      delete e.target.dataset.dragging;
+    }
+  });
+
+  window.onYouTubeIframeAPIReady = function () {
+    ytApiReady = true;
+    if (pendingSession) {
+      createYtPlayer(pendingSession.videoId);
+      pendingSession = null;
+    }
+  };
+
+  function renderGame(session) {
+    const wrap = document.getElementById("content");
+    wrap.classList.add("game");
+    wrap.innerHTML = `
+      <h1>${session.title || "研修ゲーム"}</h1>
+      <div class="frame">
+        <iframe src="${session.gameUrl}" allow="fullscreen" allowfullscreen></iframe>
+      </div>
+      <div class="note">このページを離れると再度コードが必要になります。</div>
     `;
   }
 
@@ -50,47 +200,30 @@
       return;
     }
 
-    const wrap = document.getElementById("content");
-
     if (session.type === "youtube" && session.videoId) {
-      wrap.innerHTML = `
-        <h1>${session.title || "研修動画"}</h1>
-        <div class="frame">
-          <iframe
-            src="https://www.youtube.com/embed/${encodeURIComponent(session.videoId)}?rel=0&modestbranding=1&autoplay=1"
-            allow="autoplay; encrypted-media; fullscreen"
-            allowfullscreen
-          ></iframe>
-        </div>
-        <div class="note">このページを離れると再度コードが必要になります。</div>
-      `;
+      renderYoutube(session);
     } else if (session.type === "game" && session.gameUrl) {
-      wrap.classList.add("game");
-      wrap.innerHTML = `
-        <h1>${session.title || "研修ゲーム"}</h1>
-        <div class="frame">
-          <iframe src="${session.gameUrl}" allow="fullscreen" allowfullscreen></iframe>
-        </div>
-        <div class="note">このページを離れると再度コードが必要になります。</div>
-      `;
+      renderGame(session);
     } else {
       block("コンテンツ情報が不正です。コードを入力し直してください。");
     }
   }
 
   // ページを離れる（別ページへ移動・タブを閉じる）と同時にアクセス権を破棄する。
-  // これにより「戻る」ボタンや再読み込みでの再視聴を防ぐ。
   window.addEventListener("pagehide", () => {
     sessionStorage.removeItem("viewAccess");
   });
-
-  // ブラウザのキャッシュ（bfcache）から復元された場合は、
-  // 上のpagehideで消去済みの状態を正しく反映させるため強制的に再読み込みする。
   window.addEventListener("pageshow", (event) => {
     if (event.persisted) {
       location.reload();
     }
   });
+
+  // YouTube IFrame APIを読み込む（youtube.com自体からのscriptだが、
+  // このスクリプト自体はクリック可能なUIを生成しないので外部リンクは発生しない）
+  const ytApiTag = document.createElement("script");
+  ytApiTag.src = "https://www.youtube.com/iframe_api";
+  document.head.appendChild(ytApiTag);
 
   render();
 </script>
