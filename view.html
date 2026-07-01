@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>研修コンテンツ</title>
+<style>
+  :root{--ink:#1c1f26;--paper:#f6f5f1;--line:#d8d5cc;--accent:#8a3324;}
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;background:var(--paper);color:var(--ink);font-family:"Hiragino Sans","Yu Gothic UI",sans-serif;}
+  body{display:flex;align-items:center;justify-content:center;padding:20px;}
+  .wrap{width:100%;max-width:1000px;}
+  .wrap.game{max-width:1100px;height:90vh;display:flex;flex-direction:column;}
+  h1{font-size:15px;margin:0 0 12px;color:#555;letter-spacing:.02em;}
+  .frame{position:relative;width:100%;aspect-ratio:16/9;background:#000;overflow:hidden;flex:1;}
+  .frame iframe{width:100%;height:100%;border:0;}
+  .note{margin-top:10px;font-size:12px;color:#888;}
+  .blocked{text-align:center;padding:60px 20px;}
+  .blocked p{font-size:14px;color:#555;margin-bottom:20px;}
+  .blocked a{display:inline-block;background:var(--ink);color:#fff;padding:11px 24px;text-decoration:none;font-size:14px;}
+  .blocked a:hover{background:var(--accent);}
+</style>
+</head>
+<body>
+  <div class="wrap" id="content"></div>
+
+<script>
+  function block(message) {
+    document.getElementById("content").innerHTML = `
+      <div class="blocked">
+        <p>${message}</p>
+        <a href="gallery.html">コンテンツ一覧へ戻る</a>
+      </div>
+    `;
+  }
+
+  function render() {
+    const raw = sessionStorage.getItem("viewAccess");
+    if (!raw) {
+      block("視聴・プレイ情報が確認できませんでした。コードを入力し直してください。");
+      return;
+    }
+
+    let session;
+    try {
+      session = JSON.parse(raw);
+    } catch {
+      block("情報の読み込みに失敗しました。コードを入力し直してください。");
+      return;
+    }
+
+    const wrap = document.getElementById("content");
+
+    if (session.type === "youtube" && session.videoId) {
+      wrap.innerHTML = `
+        <h1>${session.title || "研修動画"}</h1>
+        <div class="frame">
+          <iframe
+            src="https://www.youtube.com/embed/${encodeURIComponent(session.videoId)}?rel=0&modestbranding=1&autoplay=1"
+            allow="autoplay; encrypted-media; fullscreen"
+            allowfullscreen
+          ></iframe>
+        </div>
+        <div class="note">このページを離れると再度コードが必要になります。</div>
+      `;
+    } else if (session.type === "game" && session.gameUrl) {
+      wrap.classList.add("game");
+      wrap.innerHTML = `
+        <h1>${session.title || "研修ゲーム"}</h1>
+        <div class="frame">
+          <iframe src="${session.gameUrl}" allow="fullscreen" allowfullscreen></iframe>
+        </div>
+        <div class="note">このページを離れると再度コードが必要になります。</div>
+      `;
+    } else {
+      block("コンテンツ情報が不正です。コードを入力し直してください。");
+    }
+  }
+
+  // ページを離れる（別ページへ移動・タブを閉じる）と同時にアクセス権を破棄する。
+  // これにより「戻る」ボタンや再読み込みでの再視聴を防ぐ。
+  window.addEventListener("pagehide", () => {
+    sessionStorage.removeItem("viewAccess");
+  });
+
+  // ブラウザのキャッシュ（bfcache）から復元された場合は、
+  // 上のpagehideで消去済みの状態を正しく反映させるため強制的に再読み込みする。
+  window.addEventListener("pageshow", (event) => {
+    if (event.persisted) {
+      location.reload();
+    }
+  });
+
+  render();
+</script>
+</body>
+</html>
