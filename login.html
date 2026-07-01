@@ -80,6 +80,19 @@
       return;
     }
 
+    // すでに同じ対象への有効なアクセス権が残っている場合は、コード入力をスキップする
+    const targetKey = isSet ? `set:${setId}` : `content:${contentId}`;
+    try {
+      const existingRaw = localStorage.getItem("viewAccess");
+      if (existingRaw) {
+        const existing = JSON.parse(existingRaw);
+        if (existing.targetKey === targetKey && existing.viewExpiresAt > Date.now()) {
+          location.replace("view.html");
+          return;
+        }
+      }
+    } catch (e) { /* 壊れたデータは無視して通常フローへ */ }
+
     if (isSet) {
       const snap = await db.ref("sets/" + setId).once("value");
       targetData = snap.val();
@@ -200,6 +213,7 @@
       const items = isSet ? setMembers.map(toItem) : [toItem(targetData)];
 
       localStorage.setItem("viewAccess", JSON.stringify({
+        targetKey: isSet ? `set:${setId}` : `content:${contentId}`,
         title: targetData.title,
         items,
         currentIndex: 0,
