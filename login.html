@@ -206,7 +206,10 @@
         viewExpiresAt: Date.now() + viewMinutes * 60 * 1000,
       }));
 
-      location.href = "view.html";
+      // location.replace を使い、ログイン画面を履歴に残さない。
+      // これにより「戻る」を押した時にログイン画面（使用済みコード入りの状態）に
+      // 戻ってしまい、誤って再送信されるのを防ぐ。
+      location.replace("view.html");
     } catch (err) {
       showError("エラーが発生しました: " + err.message);
     } finally {
