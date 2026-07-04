@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>研修コンテンツ一覧</title>
+<style>
+  :root{
+    --ink:#1c1f26; --paper:#f6f5f1; --line:#d8d5cc; --accent:#8a3324;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;min-height:100vh;background:var(--paper);color:var(--ink);
+    font-family:"Hiragino Sans","Yu Gothic UI",sans-serif;padding:40px 20px 80px;
+  }
+  .wrap{max-width:920px;margin:0 auto;}
+  header{margin-bottom:32px;border-bottom:2px solid var(--ink);padding-bottom:16px;}
+  header h1{font-size:22px;margin:0 0 6px;}
+  header p{margin:0;font-size:13px;color:#666;}
+  .grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fill, minmax(220px, 1fr));
+    gap:20px;
+  }
+  .card{
+    background:#fff;border:1px solid var(--line);cursor:pointer;
+    transition:transform .15s ease, box-shadow .15s ease;
+    text-decoration:none;color:inherit;display:block;
+  }
+  .card:hover{transform:translateY(-3px);box-shadow:0 6px 16px rgba(0,0,0,0.08);}
+  .card:focus-visible{outline:3px solid var(--accent);outline-offset:2px;}
+  .thumb{
+    width:100%;aspect-ratio:16/9;background:#111;overflow:hidden;position:relative;
+  }
+  .thumb img{width:100%;height:100%;object-fit:cover;display:block;}
+  .collage{display:grid;width:100%;height:100%;gap:2px;background:#000;}
+  .collage img{width:100%;height:100%;object-fit:cover;display:block;}
+  .collage-1{grid-template-columns:1fr;grid-template-rows:1fr;}
+  .collage-2{grid-template-columns:1fr 1fr;grid-template-rows:1fr;}
+  .collage-3{grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;}
+  .collage-3 img:first-child{grid-column:1 / 3;}
+  .collage-4{grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;}
+  .type-tag{
+    position:absolute;top:8px;left:8px;
+    background:rgba(0,0,0,0.65);color:#fff;font-size:11px;
+    padding:2px 8px;border-radius:10px;letter-spacing:.02em;
+  }
+  .card .body{padding:12px 14px;}
+  .card .title{font-size:14px;font-weight:600;margin:0;white-space:pre-line;}
+  .empty{color:#999;font-size:14px;text-align:center;padding:60px 0;}
+  .loading{color:#999;font-size:13px;text-align:center;padding:50px 0;display:flex;align-items:center;justify-content:center;gap:10px;}
+  .spinner{
+    width:18px;height:18px;border:2.5px solid var(--line);border-top-color:var(--accent);
+    border-radius:50%;display:inline-block;animation:spin .8s linear infinite;
+  }
+  @keyframes spin{to{transform:rotate(360deg);}}
+
+  .tabs{display:flex;gap:8px;margin-bottom:24px;flex-wrap:wrap;}
+  .tab{
+    background:#fff;border:1px solid var(--line);color:#666;
+    font-size:13px;padding:8px 18px;border-radius:999px;cursor:pointer;
+    font-family:inherit;transition:background .15s ease, color .15s ease, border-color .15s ease;
+  }
+  .tab:hover{border-color:var(--accent);color:var(--accent);}
+  .tab.active{background:var(--ink);color:#fff;border-color:var(--ink);}
+
+  @media (max-width: 480px){
+    body{padding:24px 14px 60px;}
+    header h1{font-size:19px;}
+    .grid{grid-template-columns:repeat(auto-fill, minmax(150px, 1fr));gap:14px;}
+    .card .body{padding:10px 12px;}
+    .card .title{font-size:13px;}
+    .tab{font-size:12px;padding:7px 14px;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>研修コンテンツ一覧</h1>
+    <p>視聴・プレイしたいコンテンツを選んでください。専用コードが必要です（担当者に発行を依頼してください）。</p>
+  </header>
+  <div class="tabs" id="tabs">
+    <button class="tab active" data-filter="all">すべて</button>
+    <button class="tab" data-filter="set">セット</button>
+    <button class="tab" data-filter="video">動画</button>
+    <button class="tab" data-filter="game">ゲーム</button>
+  </div>
+  <div class="grid" id="grid"></div>
+  <div class="loading" id="loadingMsg"><span class="spinner"></span>読み込み中...</div>
+  <div class="empty" id="emptyMsg" style="display:none;">現在、公開中のコンテンツはありません</div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script>
+  // admin.html と同じFirebase設定に置き換えてください
+  const firebaseConfig = {
+    apiKey: "AIzaSyCN4OEFU_GgqklqE9pKVgpqvLRQPnAcIsU",
+    authDomain: "cardocgame.firebaseapp.com",
+    databaseURL: "https://cardocgame-default-rtdb.firebaseio.com",
+    projectId: "cardocgame",
+  };
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.database();
+
+  // XSS対策：DBから来た文字列は必ずこの関数を通してからHTMLに埋め込む
+  function esc(s) {
+    return String(s ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function collageHtml(thumbnails) {
+    const imgs = (thumbnails || []).filter(Boolean).slice(0, 4);
+    if (imgs.length === 0) {
+      return `<img src="" onerror="this.style.opacity=0.15">`;
+    }
+    const cls = `collage-${imgs.length}`;
+    return `<div class="collage ${cls}">${imgs.map(u => `<img src="${esc(u)}" onerror="this.style.opacity=0.15">`).join("")}</div>`;
+  }
+
+  let allItems = [];
+  let currentFilter = "all";
+
+  function cardHtml(item) {
+    if (item.category === "set") {
+      const s = item.data;
+      return `
+        <div class="thumb">
+          <span class="type-tag">セット（${(s.contentIds || []).length}件）</span>
+          ${collageHtml(s.thumbnails && s.thumbnails.length ? s.thumbnails : [s.thumbnail])}
+        </div>
+        <div class="body">
+          <p class="title">${esc(s.title)}</p>
+        </div>
+      `;
+    }
+    const c = item.data;
+    return `
+      <div class="thumb">
+        <span class="type-tag">${c.type === "game" ? "ゲーム" : "動画"}</span>
+        <img src="${esc(c.thumbnail || '')}" alt="${esc(c.title)}" onerror="this.style.opacity=0.15">
+      </div>
+      <div class="body">
+        <p class="title">${esc(c.title)}</p>
+      </div>
+    `;
+  }
+
+  function renderGrid() {
+    const grid = document.getElementById("grid");
+    grid.innerHTML = "";
+
+    const filtered = allItems.filter(item => currentFilter === "all" || item.category === currentFilter);
+
+    document.getElementById("emptyMsg").style.display = filtered.length ? "none" : "block";
+
+    filtered.forEach(item => {
+      const a = document.createElement("a");
+      a.className = "card";
+      a.href = item.href;
+      a.innerHTML = cardHtml(item);
+      grid.appendChild(a);
+    });
+  }
+
+  document.getElementById("tabs").addEventListener("click", (e) => {
+    const btn = e.target.closest(".tab");
+    if (!btn) return;
+    currentFilter = btn.dataset.filter;
+    document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t === btn));
+    renderGrid();
+  });
+
+  Promise.all([
+    db.ref("contents").once("value"),
+    db.ref("sets").once("value"),
+  ]).then(([contentsSnap, setsSnap]) => {
+    const contentsData = contentsSnap.val() || {};
+    const setsData = setsSnap.val() || {};
+
+    document.getElementById("loadingMsg").style.display = "none";
+
+    allItems = [
+      ...Object.entries(setsData).map(([id, s]) => ({
+        category: "set", href: `login.html?set=${id}`, data: s,
+      })),
+      ...Object.entries(contentsData).map(([id, c]) => ({
+        category: c.type === "game" ? "game" : "video", href: `login.html?content=${id}`, data: c,
+      })),
+    ];
+
+    renderGrid();
+  });
+</script>
+</body>
+</html>
