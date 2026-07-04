@@ -44,6 +44,16 @@
   .blocked a{display:inline-block;background:var(--ink);color:#fff;padding:11px 24px;text-decoration:none;font-size:14px;}
   .blocked a:hover{background:var(--accent);}
 
+  .set-progress{font-size:12px;color:#666;margin-left:8px;font-weight:400;}
+  .wrap.game .set-progress{color:#f0a08e;}
+  /* 残り時間わずかの警告バー（画面上部に固定表示） */
+  #lowTimeBar{
+    position:fixed;top:0;left:0;right:0;z-index:9999;
+    background:var(--accent);color:#fff;text-align:center;
+    font-size:13px;font-weight:600;padding:8px 12px;
+    transform:translateY(-100%);transition:transform .25s ease;
+  }
+  #lowTimeBar.show{transform:translateY(0);}
   .set-items-label{font-size:12px;color:#888;margin:20px 0 8px;}
   .set-items-row{display:flex;gap:12px;overflow-x:auto;padding-bottom:6px;}
   .set-item{
@@ -55,6 +65,7 @@
 </style>
 </head>
 <body>
+  <div id="lowTimeBar"></div>
   <div class="wrap" id="content"></div>
 
 <script>
@@ -72,6 +83,8 @@
 
   function block(message) {
     if (countdownInterval) clearInterval(countdownInterval);
+    const bar = document.getElementById("lowTimeBar");
+    if (bar) bar.classList.remove("show");
     document.body.classList.remove("game-mode");
     document.getElementById("content").classList.remove("game");
     document.getElementById("content").innerHTML = `
@@ -209,7 +222,7 @@
     document.body.classList.remove("game-mode");
 
     const setLabel = session.items.length > 1
-      ? `<div class="set-label">セット: ${esc((session.title || "").replace(/\n/g, " "))}</div>`
+      ? `<div class="set-label">セット: ${esc((session.title || "").replace(/\n/g, " "))}<span class="set-progress">（${session.currentIndex + 1} / ${session.items.length} 本目）</span></div>`
       : "";
 
     wrap.innerHTML = `${setLabel}<div id="mainArea"></div>`;
@@ -250,9 +263,16 @@
         return;
       }
 
+      const low = remaining < 5 * 60 * 1000;
       if (el) {
         el.textContent = formatRemaining(remaining);
-        el.classList.toggle("warning", remaining < 5 * 60 * 1000);
+        el.classList.toggle("warning", low);
+      }
+      // 残り5分を切ったら画面上部に警告バーを固定表示（見落とし防止）
+      const bar = document.getElementById("lowTimeBar");
+      if (bar) {
+        bar.textContent = `⏳ まもなく終了します（${formatRemaining(remaining)}）`;
+        bar.classList.toggle("show", low);
       }
     };
 

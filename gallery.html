@@ -46,6 +46,17 @@
     background:rgba(0,0,0,0.65);color:#fff;font-size:11px;
     padding:2px 8px;border-radius:10px;letter-spacing:.02em;
   }
+  .viewed-tag{
+    position:absolute;top:8px;right:8px;
+    background:rgba(47,107,44,0.92);color:#fff;font-size:11px;font-weight:600;
+    padding:2px 8px;border-radius:10px;letter-spacing:.02em;
+  }
+  .tab-count{
+    display:inline-block;min-width:18px;padding:0 5px;margin-left:2px;
+    background:rgba(0,0,0,0.12);border-radius:999px;font-size:11px;line-height:16px;
+    text-align:center;vertical-align:middle;
+  }
+  .tab.active .tab-count{background:rgba(255,255,255,0.28);}
   .card .body{padding:12px 14px;}
   .card .title{font-size:14px;font-weight:600;margin:0;white-space:pre-line;}
   .empty{color:#999;font-size:14px;text-align:center;padding:60px 0;}
@@ -127,12 +138,24 @@
   let allItems = [];
   let currentFilter = "all";
 
+  // この端末で視聴済みの対象キー一覧
+  function getViewedTargets() {
+    try { return JSON.parse(localStorage.getItem("viewedTargets") || "[]"); }
+    catch (e) { return []; }
+  }
+
+  function viewedBadgeHtml(item) {
+    return getViewedTargets().includes(item.targetKey)
+      ? `<span class="viewed-tag">✓ 視聴済み</span>` : "";
+  }
+
   function cardHtml(item) {
     if (item.category === "set") {
       const s = item.data;
       return `
         <div class="thumb">
           <span class="type-tag">セット（${(s.contentIds || []).length}件）</span>
+          ${viewedBadgeHtml(item)}
           ${collageHtml(s.thumbnails && s.thumbnails.length ? s.thumbnails : [s.thumbnail])}
         </div>
         <div class="body">
@@ -144,12 +167,29 @@
     return `
       <div class="thumb">
         <span class="type-tag">${c.type === "game" ? "ゲーム" : "動画"}</span>
+        ${viewedBadgeHtml(item)}
         <img src="${esc(c.thumbnail || '')}" alt="${esc(c.title)}" onerror="this.style.opacity=0.15">
       </div>
       <div class="body">
         <p class="title">${esc(c.title)}</p>
       </div>
     `;
+  }
+
+  // タブに件数バッジを付ける（例：動画 5）
+  function updateTabCounts() {
+    const counts = {
+      all: allItems.length,
+      set: allItems.filter(i => i.category === "set").length,
+      video: allItems.filter(i => i.category === "video").length,
+      game: allItems.filter(i => i.category === "game").length,
+    };
+    document.querySelectorAll(".tab").forEach(tab => {
+      const f = tab.dataset.filter;
+      const base = tab.dataset.label || tab.textContent.trim();
+      tab.dataset.label = base;
+      tab.innerHTML = `${esc(base)} <span class="tab-count">${counts[f] ?? 0}</span>`;
+    });
   }
 
   function renderGrid() {
@@ -196,13 +236,14 @@
 
     allItems = [
       ...Object.entries(setsData).map(([id, s]) => ({
-        category: "set", href: `login.html?set=${id}`, data: s,
+        category: "set", href: `login.html?set=${id}`, data: s, targetKey: `set:${id}`,
       })),
       ...sortedContentEntries.map(([id, c]) => ({
-        category: c.type === "game" ? "game" : "video", href: `login.html?content=${id}`, data: c,
+        category: c.type === "game" ? "game" : "video", href: `login.html?content=${id}`, data: c, targetKey: `content:${id}`,
       })),
     ];
 
+    updateTabCounts();
     renderGrid();
   });
 </script>

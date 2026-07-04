@@ -82,6 +82,14 @@
       .replace(/'/g, "&#39;");
   }
 
+  // コード入力の正規化：全角英数記号→半角、空白（全角含む）を除去。
+  // スマホやメールからのコピペで混入しがちな崩れを吸収し、入力ミスを減らす。
+  function normalizeCode(s) {
+    return String(s ?? "")
+      .replace(/[！-～]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+      .replace(/\s+/g, "");
+  }
+
   const params = new URLSearchParams(location.search);
   const contentId = params.get("content");
   const setId = params.get("set");
@@ -169,13 +177,24 @@
       ${membersHtml}
       <p class="sub">担当者から伝えられた専用コードを入力してください（1回のみ有効です）</p>
       <form id="loginForm">
-        <input type="text" id="codeInput" maxlength="20" autocomplete="off" placeholder="Ab3!Xy9@Qz1_" required>
+        <input type="text" id="codeInput" maxlength="20" autocomplete="off"
+               autocapitalize="off" autocorrect="off" spellcheck="false"
+               inputmode="text" placeholder="Ab3!Xy9@Qz1_" required>
         <button id="submitBtn" type="submit">${isSet ? "見る" : (targetData.type === "game" ? "プレイする" : "視聴する")}</button>
       </form>
       <div class="msg error" id="errorMsg"></div>
       <a class="back" href="gallery.html">← コンテンツ一覧へ戻る</a>
     `;
     document.getElementById("loginForm").addEventListener("submit", submitCode);
+
+    const input = document.getElementById("codeInput");
+    // 貼り付け・入力のたびに正規化（カーソル位置は末尾でよい短い入力なので気にしない）
+    input.addEventListener("input", () => {
+      const normalized = normalizeCode(input.value);
+      if (normalized !== input.value) input.value = normalized;
+    });
+    // 開いてすぐ入力できるようにフォーカス
+    input.focus();
   }
 
   function toItem(c) {
@@ -192,7 +211,7 @@
   async function submitCode(e) {
     e.preventDefault();
     const btn = document.getElementById("submitBtn");
-    const raw = document.getElementById("codeInput").value.trim();
+    const raw = normalizeCode(document.getElementById("codeInput").value);
     document.getElementById("errorMsg").classList.remove("show");
     if (!raw) return false;
 
@@ -211,30 +230,52 @@
 
       const targetMatches = isSet ? entry.setId === setId : entry.contentId === contentId;
       if (!targetMatches) {
-        showError("このコードは別のコンテンツ・セット専用です。");
+        showError("このコードは別のコンテンツ・セット専用です。", true);
         return false;
       }
       if (entry.used) {
-        showError("このコードは既に使用されています。新しいコードを担当者に発行してもらってください。");
+        showError("このコードは既に使用されています。新しいコードを担当者に発行してもらってください。", true);
         return false;
       }
       if (entry.expiresAt < Date.now()) {
-        showError("このコードの有効期限が切れています。新しいコードを担当者に発行してもらってください。");
+        showError("このコードの有効期限が切れています。新しいコードを担当者に発行してもらってください。", true);
         return false;
       }
 
-      await ref.update({ used: true, usedAt: Date.now() });
+      // used:false → true をアトミックに確定させる。
+      // これにより「2人が同時に同じコードを入れて両方通ってしまう」二重使用を防ぐ。
+      const tx = await ref.transaction((cur) => {
+        if (!cur || cur.used) return; // 既に使われていたら中断（committed=false）
+        cur.used = true;
+        cur.usedAt = Date.now();
+        return cur;
+      });
+      if (!tx.committed) {
+        showError("このコードは既に使用されています。新しいコードを担当者に発行してもらってください。", true);
+        return false;
+      }
 
       const viewMinutes = entry.viewMinutes || 60;
       const items = isSet ? setMembers.map(toItem) : [toItem(targetData)];
 
+      const targetKey = isSet ? `set:${setId}` : `content:${contentId}`;
+
       localStorage.setItem("viewAccess", JSON.stringify({
-        targetKey: isSet ? `set:${setId}` : `content:${contentId}`,
+        targetKey,
         title: targetData.title,
         items,
         currentIndex: 0,
         viewExpiresAt: Date.now() + viewMinutes * 60 * 1000,
       }));
+
+      // 一覧ページで「✓ 視聴済み」を出すための記録（この端末のみ・重複なし）
+      try {
+        const viewed = JSON.parse(localStorage.getItem("viewedTargets") || "[]");
+        if (!viewed.includes(targetKey)) {
+          viewed.push(targetKey);
+          localStorage.setItem("viewedTargets", JSON.stringify(viewed));
+        }
+      } catch (e) { /* 記録に失敗しても視聴は続行 */ }
 
       // location.replace を使い、ログイン画面を履歴に残さない。
       // これにより「戻る」を押した時にログイン画面（使用済みコード入りの状態）に
@@ -249,9 +290,16 @@
     return false;
   }
 
-  function showError(text) {
+  // terminal=true のときは「これ以上ここで操作しても無駄」な状況なので、
+  // 一覧へ戻るボタンを併せて出して次の行動を明確にする。
+  function showError(text, terminal) {
     const el = document.getElementById("errorMsg");
-    el.textContent = text;
+    if (terminal) {
+      el.innerHTML = `<div>${esc(text)}</div>
+        <a class="back" href="gallery.html" style="margin-top:10px;">← コンテンツ一覧へ戻る</a>`;
+    } else {
+      el.textContent = text;
+    }
     el.classList.add("show");
   }
 
