@@ -186,11 +186,19 @@
 
     document.getElementById("loadingMsg").style.display = "none";
 
+    // コンテンツは管理画面でドラッグ並び替えした順（order）を優先し、
+    // 未設定の古いデータは登録順（createdAt）にフォールバックする
+    const sortedContentEntries = Object.entries(contentsData).sort((a, b) => {
+      const oa = a[1].order !== undefined ? a[1].order : (a[1].createdAt || 0);
+      const ob = b[1].order !== undefined ? b[1].order : (b[1].createdAt || 0);
+      return oa - ob;
+    });
+
     allItems = [
       ...Object.entries(setsData).map(([id, s]) => ({
         category: "set", href: `login.html?set=${id}`, data: s,
       })),
-      ...Object.entries(contentsData).map(([id, c]) => ({
+      ...sortedContentEntries.map(([id, c]) => ({
         category: c.type === "game" ? "game" : "video", href: `login.html?content=${id}`, data: c,
       })),
     ];
