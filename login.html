@@ -244,14 +244,24 @@
 
       // used:false → true をアトミックに確定させる。
       // これにより「2人が同時に同じコードを入れて両方通ってしまう」二重使用を防ぐ。
+      // 注意：transactionは初回実行時、データが実在してもローカルキャッシュが
+      // 空だと null を渡してくる。その場合に undefined を返す（=中断）と
+      // サーバー値での再実行が行われないまま失敗するので、null のときは
+      // null を返して「サーバー実データでの再実行」を促すのが正しい書き方。
       const tx = await ref.transaction((cur) => {
-        if (!cur || cur.used) return; // 既に使われていたら中断（committed=false）
+        if (cur === null) return null;   // キャッシュ未取得 → 実データで再実行される
+        if (cur.used) return;            // 本当に使用済み → 中断（committed=false）
         cur.used = true;
         cur.usedAt = Date.now();
         return cur;
       });
       if (!tx.committed) {
         showError("このコードは既に使用されています。新しいコードを担当者に発行してもらってください。", true);
+        return false;
+      }
+      if (!tx.snapshot.exists()) {
+        // 照合直後に管理側で削除された等のまれなケース
+        showError("コードが見つかりません。担当者に確認してください。", true);
         return false;
       }
 
