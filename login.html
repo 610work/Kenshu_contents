@@ -61,6 +61,7 @@
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-functions-compat.js"></script>
 <script>
   // admin.html / gallery.html / view.html と同じFirebase設定に置き換えてください
   const firebaseConfig = {
@@ -71,6 +72,8 @@
   };
   firebase.initializeApp(firebaseConfig);
   const db = firebase.database();
+  // コード検証と署名付きURL発行を行うCloud Function（東京リージョン）
+  const redeemCode = firebase.app().functions("asia-northeast1").httpsCallable("redeemCode");
 
   // XSS対策：DBから来た文字列は必ずこの関数を通してからHTMLに埋め込む
   function esc(s) {
@@ -197,17 +200,6 @@
     input.focus();
   }
 
-  function toItem(c) {
-    return {
-      title: c.title || "",
-      type: c.type,
-      videoId: c.videoId || null,
-      gameUrl: c.gameUrl || null,
-      videoUrl: c.videoUrl || null,
-      thumbnail: c.thumbnail || "",
-    };
-  }
-
   async function submitCode(e) {
     e.preventDefault();
     const btn = document.getElementById("submitBtn");
@@ -215,67 +207,25 @@
     document.getElementById("errorMsg").classList.remove("show");
     if (!raw) return false;
 
+    const defaultLabel = isSet ? "見る" : (targetData.type === "game" ? "プレイする" : "視聴する");
     btn.disabled = true;
     btn.textContent = "確認中...";
 
     try {
-      const ref = db.ref("otp_codes/" + raw);
-      const snap = await ref.once("value");
-      const entry = snap.val();
-
-      if (!entry) {
-        showError("コードが見つかりません。入力内容をご確認ください。");
-        return false;
-      }
-
-      const targetMatches = isSet ? entry.setId === setId : entry.contentId === contentId;
-      if (!targetMatches) {
-        showError("このコードは別のコンテンツ・セット専用です。", true);
-        return false;
-      }
-      if (entry.used) {
-        showError("このコードは既に使用されています。新しいコードを担当者に発行してもらってください。", true);
-        return false;
-      }
-      if (entry.expiresAt < Date.now()) {
-        showError("このコードの有効期限が切れています。新しいコードを担当者に発行してもらってください。", true);
-        return false;
-      }
-
-      // used:false → true をアトミックに確定させる。
-      // これにより「2人が同時に同じコードを入れて両方通ってしまう」二重使用を防ぐ。
-      // 注意：transactionは初回実行時、データが実在してもローカルキャッシュが
-      // 空だと null を渡してくる。その場合に undefined を返す（=中断）と
-      // サーバー値での再実行が行われないまま失敗するので、null のときは
-      // null を返して「サーバー実データでの再実行」を促すのが正しい書き方。
-      const tx = await ref.transaction((cur) => {
-        if (cur === null) return null;   // キャッシュ未取得 → 実データで再実行される
-        if (cur.used) return;            // 本当に使用済み → 中断（committed=false）
-        cur.used = true;
-        cur.usedAt = Date.now();
-        return cur;
-      });
-      if (!tx.committed) {
-        showError("このコードは既に使用されています。新しいコードを担当者に発行してもらってください。", true);
-        return false;
-      }
-      if (!tx.snapshot.exists()) {
-        // 照合直後に管理側で削除された等のまれなケース
-        showError("コードが見つかりません。担当者に確認してください。", true);
-        return false;
-      }
-
-      const viewMinutes = entry.viewMinutes || 60;
-      const items = isSet ? setMembers.map(toItem) : [toItem(targetData)];
+      // コードの検証・使用済み化・署名付きURL発行はすべてサーバー（Cloud Function）側で行う。
+      // 動画URLはこの呼び出しの成功時にのみ、視聴時間だけ有効な形で返ってくる。
+      const res = await redeemCode(isSet ? { code: raw, setId } : { code: raw, contentId });
+      const out = res.data;
 
       const targetKey = isSet ? `set:${setId}` : `content:${contentId}`;
 
       localStorage.setItem("viewAccess", JSON.stringify({
         targetKey,
-        title: targetData.title,
-        items,
+        title: out.title || targetData.title,
+        items: out.items || [],
         currentIndex: 0,
-        viewExpiresAt: Date.now() + viewMinutes * 60 * 1000,
+        // 署名付きURLの失効と揃える（画面側カウントダウン用）
+        viewExpiresAt: Date.now() + (out.viewMinutes || 60) * 60 * 1000,
       }));
 
       // 一覧ページで「✓ 視聴済み」を出すための記録（この端末のみ・重複なし）
@@ -292,10 +242,16 @@
       // 戻ってしまい、誤って再送信されるのを防ぐ。
       location.replace("view.html");
     } catch (err) {
-      showError("エラーが発生しました: " + err.message);
-    } finally {
+      // Cloud Functionが投げたHttpsErrorのメッセージをそのまま表示する。
+      // 「使用済み・期限切れ・対象違い」は再入力しても無駄なので戻る導線付き(terminal)にする。
+      // callableのerr.codeは "functions/already-exists" のように接頭辞が付くので外す。
+      const code = (err.code || "").replace(/^functions\//, "");
+      const terminalCodes = ["already-exists", "deadline-exceeded", "permission-denied", "not-found"];
+      const terminal = terminalCodes.includes(code);
+      const msg = err.message || "エラーが発生しました。しばらくして再度お試しください。";
+      showError(msg, terminal);
       btn.disabled = false;
-      btn.textContent = isSet ? "見る" : (targetData.type === "game" ? "プレイする" : "視聴する");
+      btn.textContent = defaultLabel;
     }
     return false;
   }
