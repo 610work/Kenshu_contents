@@ -88,7 +88,18 @@
   <div id="lowTimeBar"></div>
   <div class="wrap" id="content"></div>
 
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <script>
+  const firebaseConfig = {
+    apiKey: "AIzaSyCN4OEFU_GgqklqE9pKVgpqvLRQPnAcIsU",
+    authDomain: "cardocgame.firebaseapp.com",
+    databaseURL: "https://cardocgame-default-rtdb.firebaseio.com",
+    projectId: "cardocgame",
+  };
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.database();
+
   let countdownInterval = null;
 
   // XSS対策：DBから来た文字列は必ずこの関数を通してからHTMLに埋め込む
@@ -101,8 +112,111 @@
       .replace(/'/g, "&#39;");
   }
 
+  // ===== 視聴時間トラッキング =====
+  const DB_URL = firebaseConfig.databaseURL;
+
+  function getTrainee() {
+    const name = localStorage.getItem("traineeName");
+    if (!name) return null;
+    return { name, key: localStorage.getItem("traineeKey") || "" };
+  }
+  // コンテンツのキー（タイトルの表記ゆれを吸収。gallery側の氏名正規化と同じ考え方）
+  function titleKeyOf(title) {
+    const k = String(title || "").normalize("NFKC").replace(/\s+/g, "")
+      .toLowerCase().replace(/[.#$\[\]\/]/g, "_").slice(0, 180);
+    return k || "untitled";
+  }
+  function loadLocalProgress(k) {
+    try { return JSON.parse(localStorage.getItem("progressLocal") || "{}")[k] || null; }
+    catch (e) { return null; }
+  }
+  function saveLocalProgress(k, rec) {
+    try {
+      const all = JSON.parse(localStorage.getItem("progressLocal") || "{}");
+      all[k] = rec; localStorage.setItem("progressLocal", JSON.stringify(all));
+    } catch (e) {}
+  }
+
+  let trackState = null;
+  let trackTimer = null;
+
+  function stopTracking() {
+    if (trackTimer) { clearInterval(trackTimer); trackTimer = null; }
+    flushProgress(false);
+    trackState = null;
+  }
+
+  function startTracking(item) {
+    stopTracking(); // 前のコンテンツ分を保存して停止
+    const trainee = getTrainee();
+    if (!trainee || !trainee.key) return; // 名前未設定なら記録しない
+    const cKey = titleKeyOf(item.title);
+    const prev = loadLocalProgress(trainee.key + "/" + cKey) || {};
+    trackState = {
+      path: "progress/" + trainee.key + "/" + cKey,
+      storeKey: trainee.key + "/" + cKey,
+      name: trainee.name,
+      title: (item.title || "").replace(/\n/g, " "),
+      type: item.type,
+      watched: prev.watched || 0,           // 端末内の累計を引き継ぐ
+      duration: prev.duration || null,
+      firstViewedAt: prev.firstViewedAt || Date.now(),
+      ticks: 0,
+    };
+    trackTimer = setInterval(trackTick, 5000);
+  }
+
+  function trackTick() {
+    if (!trackState) return;
+    let active = false;
+    if (trackState.type === "mp4") {
+      const v = document.querySelector("#content video");
+      if (v) {
+        if (!v.paused && !v.ended && !v.seeking) active = true;
+        if (v.duration && isFinite(v.duration)) trackState.duration = Math.round(v.duration);
+      }
+    } else {
+      // ゲーム等：タブが見えている間はプレイ中とみなす
+      if (document.visibilityState === "visible") active = true;
+    }
+    if (active) trackState.watched += 5;
+    trackState.ticks++;
+    saveLocalProgress(trackState.storeKey, {
+      watched: trackState.watched, duration: trackState.duration, firstViewedAt: trackState.firstViewedAt,
+    });
+    if (trackState.ticks % 3 === 0) flushProgress(false); // 15秒ごとにDBへ
+  }
+
+  function flushProgress(useKeepalive) {
+    if (!trackState) return;
+    const s = trackState;
+    const payload = {
+      name: s.name, title: s.title, type: s.type,
+      watchedSeconds: Math.round(s.watched),
+      durationSeconds: s.duration || null,
+      firstViewedAt: s.firstViewedAt, lastViewedAt: Date.now(),
+    };
+    if (useKeepalive) {
+      // ページ離脱時でも届くように keepalive 付き fetch でPATCH
+      try {
+        fetch(DB_URL + "/" + s.path + ".json", {
+          method: "PATCH", body: JSON.stringify(payload), keepalive: true,
+        }).catch(() => {});
+      } catch (e) {}
+    } else {
+      db.ref(s.path).update(payload).catch(() => {});
+    }
+  }
+
+  // 離脱・タブ非表示時に取りこぼさないよう保存
+  window.addEventListener("pagehide", () => flushProgress(true));
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushProgress(true);
+  });
+
   function block(message) {
     if (countdownInterval) clearInterval(countdownInterval);
+    stopTracking(); // 視聴終了時に記録を確定
     const bar = document.getElementById("lowTimeBar");
     if (bar) bar.classList.remove("show");
     document.body.classList.remove("game-mode");
@@ -250,9 +364,12 @@
 
     if (item.type === "mp4" && item.videoUrl) {
       renderMp4Into(mainArea, item, session);
+      startTracking(item);
     } else if (item.type === "game" && item.gameUrl) {
       renderGameInto(mainArea, item, wrap);
+      startTracking(item);
     } else {
+      stopTracking();
       mainArea.innerHTML = `<p style="font-size:13px;color:#888;">このコンテンツは表示できません。管理者にお問い合わせください。</p>`;
     }
 

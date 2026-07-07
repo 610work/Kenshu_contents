@@ -84,13 +84,53 @@
     .card .title{font-size:13px;}
     .tab{font-size:12px;padding:7px 14px;}
   }
+
+  /* 研修生の名前入力ゲート */
+  #nameGate{
+    position:fixed;inset:0;z-index:1000;background:var(--paper);
+    display:flex;align-items:center;justify-content:center;padding:20px;
+  }
+  #nameGate .box{width:100%;max-width:400px;background:#fff;border:1px solid var(--line);padding:28px;}
+  #nameGate h2{margin:0 0 6px;font-size:18px;}
+  #nameGate p{margin:0 0 18px;font-size:13px;color:#777;line-height:1.7;}
+  #nameGate input{
+    width:100%;font-size:16px;padding:13px 12px;border:1px solid var(--line);margin-bottom:14px;
+    font-family:inherit;
+  }
+  #nameGate input:focus{outline:2px solid var(--accent);outline-offset:1px;}
+  #nameGate button{width:100%;background:var(--ink);color:#fff;border:none;padding:13px;font-size:14px;cursor:pointer;}
+  #nameGate button:hover{background:var(--accent);}
+  #nameGate .err{color:var(--accent);font-size:12px;margin:-8px 0 12px;display:none;}
+  #nameGate .err.show{display:block;}
+  /* ヘッダーの研修生表示 */
+  .trainee-badge{
+    font-size:12px;color:#555;margin-top:8px;
+  }
+  .trainee-badge b{color:var(--ink);}
+  .trainee-badge button{
+    background:none;border:none;color:var(--accent);font-size:12px;cursor:pointer;
+    text-decoration:underline;padding:0 0 0 6px;font-family:inherit;
+  }
 </style>
 </head>
 <body>
+<div id="nameGate">
+  <div class="box">
+    <h2>お名前を入力してください</h2>
+    <p>研修の進捗を記録します。<b>フルネーム</b>で入力してください（毎回同じ名前でお願いします）。</p>
+    <form id="nameForm">
+      <input type="text" id="nameInput" placeholder="例：山田 太郎" autocomplete="name" maxlength="40" required>
+      <div class="err" id="nameErr">お名前を入力してください。</div>
+      <button type="submit">研修をはじめる</button>
+    </form>
+  </div>
+</div>
+
 <div class="wrap">
   <header>
     <h1>研修コンテンツ一覧</h1>
     <p>視聴・プレイしたいコンテンツを選んでください。専用コードが必要です（担当者に発行を依頼してください）。</p>
+    <div class="trainee-badge" id="traineeBadge"></div>
   </header>
   <div class="tabs" id="tabs">
     <button class="tab active" data-filter="all">すべて</button>
@@ -124,6 +164,70 @@
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#39;");
+  }
+
+  // ===== 研修生の名前ゲート =====
+  // 表記ゆれ（前後空白・中間空白・全角半角・大文字小文字）を吸収して
+  // 「同一人物キー」を作る。これでキーが一致すれば自動的に同じ人として集計される。
+  // Firebaseのキーに使えない文字（. # $ [ ] /）は _ に置換する。
+  function traineeKeyOf(name) {
+    return String(name || "")
+      .normalize("NFKC")          // 全角英数記号→半角、半角カナ→全角カナ 等
+      .replace(/\s+/g, "")        // 空白（全角含む）を全部除去
+      .toLowerCase()              // 英字の大文字小文字を無視
+      .replace(/[.#$\[\]\/]/g, "_");
+  }
+
+  function getTrainee() {
+    const name = localStorage.getItem("traineeName");
+    if (!name) return null;
+    return { name, key: localStorage.getItem("traineeKey") || traineeKeyOf(name) };
+  }
+
+  function setTrainee(rawName) {
+    const name = rawName.trim().replace(/\s+/g, " "); // 表示用は連続空白を1つに
+    localStorage.setItem("traineeName", name);
+    localStorage.setItem("traineeKey", traineeKeyOf(name));
+  }
+
+  function renderTraineeBadge() {
+    const t = getTrainee();
+    const badge = document.getElementById("traineeBadge");
+    if (!badge) return;
+    if (t) {
+      badge.innerHTML = `研修生：<b>${esc(t.name)}</b><button onclick="changeTrainee()">名前を変更</button>`;
+    } else {
+      badge.innerHTML = "";
+    }
+  }
+
+  window.changeTrainee = function () {
+    document.getElementById("nameInput").value = (getTrainee() || {}).name || "";
+    document.getElementById("nameGate").style.display = "flex";
+    document.getElementById("nameInput").focus();
+  };
+
+  function initNameGate() {
+    const gate = document.getElementById("nameGate");
+    const input = document.getElementById("nameInput");
+    const err = document.getElementById("nameErr");
+    const t = getTrainee();
+    if (t) {
+      gate.style.display = "none";
+    } else {
+      gate.style.display = "flex";
+      setTimeout(() => input.focus(), 100);
+    }
+    document.getElementById("nameForm").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const val = input.value.trim();
+      if (!val) { err.classList.add("show"); return; }
+      err.classList.remove("show");
+      setTrainee(val);
+      gate.style.display = "none";
+      renderTraineeBadge();
+    });
+    renderTraineeBadge();
   }
 
   function collageHtml(thumbnails) {
@@ -216,6 +320,9 @@
     document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t === btn));
     renderGrid();
   });
+
+  // 名前ゲートを起動（未入力なら名前を聞く）
+  initNameGate();
 
   Promise.all([
     db.ref("contents").once("value"),
