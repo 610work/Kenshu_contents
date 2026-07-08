@@ -272,7 +272,17 @@
 
   // ===== 動画終了 → 確認クイズ → 自動で次へ =====
   function onVideoEnded(item) {
-    stopTracking(); // 視聴時間を確定
+    // 最後まで再生したので「見終わった＝100%」として確定する。
+    // （5秒ごとのカウントだと端数で99%等になりがちなため、終端で満了扱いにする）
+    const v = document.querySelector("#content video");
+    if (trackState && v && v.duration && isFinite(v.duration)) {
+      trackState.duration = Math.round(v.duration);
+      trackState.watched = Math.max(trackState.watched, trackState.duration);
+      saveLocalProgress(trackState.storeKey, {
+        watched: trackState.watched, duration: trackState.duration, firstViewedAt: trackState.firstViewedAt,
+      });
+    }
+    stopTracking(); // 視聴時間を確定（DBへflush）
     const content = contentForItem(item);
     const quiz = (content && content.quiz || []).filter((q) => q && q.q && (q.choices || []).length >= 2);
     if (quiz.length) {
