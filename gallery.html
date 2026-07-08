@@ -111,6 +111,14 @@
     background:none;border:none;color:var(--accent);font-size:12px;cursor:pointer;
     text-decoration:underline;padding:0 0 0 6px;font-family:inherit;
   }
+  /* 視聴中コンテンツへの再入場バナー */
+  #resumeBanner{margin-bottom:22px;}
+  #resumeBanner a{
+    display:block;background:#f0e2dc;border:1px solid var(--accent);color:var(--accent);
+    padding:13px 16px;text-decoration:none;font-size:14px;font-weight:600;border-radius:4px;
+  }
+  #resumeBanner a span{font-weight:normal;font-size:12px;}
+  #resumeBanner a:hover{background:var(--accent);color:#fff;}
 </style>
 </head>
 <body>
@@ -132,6 +140,7 @@
     <p>視聴・プレイしたいコンテンツを選んでください。専用コードが必要です（担当者に発行を依頼してください）。</p>
     <div class="trainee-badge" id="traineeBadge"></div>
   </header>
+  <div id="resumeBanner" style="display:none;"></div>
   <div class="tabs" id="tabs">
     <button class="tab active" data-filter="all">すべて</button>
     <button class="tab" data-filter="set">セット</button>
@@ -321,8 +330,24 @@
     renderGrid();
   });
 
+  // 視聴時間が残っているコンテンツがあれば「戻る」バナーを出す（時間内の再入場）
+  function renderResumeBanner() {
+    const el = document.getElementById("resumeBanner");
+    let sess = null;
+    try { sess = JSON.parse(localStorage.getItem("viewAccess") || "null"); } catch (e) {}
+    if (sess && sess.viewExpiresAt && sess.viewExpiresAt > Date.now()) {
+      const min = Math.max(1, Math.round((sess.viewExpiresAt - Date.now()) / 60000));
+      const title = esc((sess.title || "視聴中のコンテンツ").replace(/\n/g, " "));
+      el.innerHTML = `<a href="view.html">▶ 「${title}」の続きを見る <span>（残り約${min}分・時間内なら何度でも再入場できます）</span></a>`;
+      el.style.display = "block";
+    } else {
+      el.style.display = "none";
+    }
+  }
+
   // 名前ゲートを起動（未入力なら名前を聞く）
   initNameGate();
+  renderResumeBanner();
 
   Promise.all([
     db.ref("contents").once("value"),

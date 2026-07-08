@@ -54,6 +54,31 @@
     transform:translateY(-100%);transition:transform .25s ease;
   }
   #lowTimeBar.show{transform:translateY(0);}
+  /* 確認クイズ／完了パネル */
+  #quizOverlay{
+    position:fixed;inset:0;z-index:9998;background:rgba(28,31,38,0.55);
+    display:none;align-items:flex-start;justify-content:center;padding:24px 16px;overflow-y:auto;
+  }
+  #quizOverlay.show{display:flex;}
+  .quiz-box{width:100%;max-width:560px;background:var(--paper);border:1px solid var(--line);padding:24px;}
+  .quiz-box h2{margin:0 0 4px;font-size:18px;}
+  .quiz-box .lead{font-size:13px;color:#777;margin:0 0 18px;}
+  .qblock{border-top:1px solid var(--line);padding:16px 0;}
+  .qblock .qtext{font-weight:600;font-size:15px;margin-bottom:10px;}
+  .choice{
+    display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);
+    border-radius:6px;margin-bottom:8px;cursor:pointer;font-size:14px;background:#fff;
+  }
+  .choice input{width:auto;margin:0;}
+  .choice.correct{border-color:#2f6b2c;background:#e4efe0;}
+  .choice.wrong{border-color:var(--accent);background:#f6e0dd;}
+  .qexplain{font-size:12px;color:#555;margin-top:6px;display:none;}
+  .qexplain.show{display:block;}
+  .quiz-actions{display:flex;gap:10px;margin-top:18px;}
+  .quiz-actions button{flex:1;background:var(--ink);color:#fff;border:none;padding:13px;font-size:14px;cursor:pointer;}
+  .quiz-actions button:hover{background:var(--accent);}
+  .quiz-result{font-size:15px;font-weight:600;margin-top:14px;text-align:center;}
+
   .set-items-label{font-size:12px;color:#888;margin:20px 0 8px;}
   .set-items-row{display:flex;gap:12px;overflow-x:auto;padding-bottom:6px;}
   .set-item{
@@ -87,6 +112,7 @@
 <body>
   <div id="lowTimeBar"></div>
   <div class="wrap" id="content"></div>
+  <div id="quizOverlay"><div class="quiz-box" id="quizBox"></div></div>
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
@@ -214,6 +240,146 @@
     if (document.visibilityState === "hidden") flushProgress(true);
   });
 
+  // ===== コンテンツ情報（並び順・確認クイズ）の読み込み =====
+  // contents は公開読み取りできるので、タイトルで突き合わせて order と quiz を得る。
+  let contentMap = {}; // titleKey -> content
+  function loadContentMap() {
+    return db.ref("contents").once("value").then((snap) => {
+      const data = snap.val() || {};
+      contentMap = {};
+      Object.values(data).forEach((c) => { if (c && c.title) contentMap[titleKeyOf(c.title)] = c; });
+    }).catch(() => {});
+  }
+  function contentForItem(item) {
+    return contentMap[titleKeyOf(item && item.title)] || null;
+  }
+
+  // セット内の並び順を、ギャラリーの表示順（order）に合わせる（1回だけ）
+  function sortSessionByOrder(session) {
+    if (!session || session._sorted || !session.items || session.items.length < 2) return session;
+    const currentTitle = (session.items[session.currentIndex] || {}).title;
+    session.items.sort((a, b) => {
+      const oa = (contentForItem(a) || {}).order;
+      const ob = (contentForItem(b) || {}).order;
+      return (oa !== undefined ? oa : 9999) - (ob !== undefined ? ob : 9999);
+    });
+    const ni = session.items.findIndex((it) => it.title === currentTitle);
+    session.currentIndex = ni >= 0 ? ni : 0;
+    session._sorted = true;
+    saveSession(session);
+    return session;
+  }
+
+  // ===== 動画終了 → 確認クイズ → 自動で次へ =====
+  function onVideoEnded(item) {
+    stopTracking(); // 視聴時間を確定
+    const content = contentForItem(item);
+    const quiz = (content && content.quiz || []).filter((q) => q && q.q && (q.choices || []).length >= 2);
+    if (quiz.length) {
+      showQuiz(item, quiz, advanceOrFinish);
+    } else {
+      advanceOrFinish();
+    }
+  }
+
+  function advanceOrFinish() {
+    const s = getSession();
+    if (s && s.items && s.currentIndex < s.items.length - 1) {
+      switchItem(s.currentIndex + 1); // セットの次のコンテンツへ自動で進む
+    } else {
+      showCompletion();
+    }
+  }
+
+  function showCompletion() {
+    const s = getSession();
+    const isSet = s && s.items && s.items.length > 1;
+    document.getElementById("quizBox").innerHTML = `
+      <h2>✓ 視聴が完了しました</h2>
+      <p class="lead">${isSet ? "このセットのすべてのコンテンツを視聴しました。" : "お疲れさまでした。"}</p>
+      <div class="quiz-actions">
+        <button onclick="location.href='gallery.html'">コンテンツ一覧へ戻る</button>
+      </div>`;
+    document.getElementById("quizOverlay").classList.add("show");
+  }
+
+  function showQuiz(item, quiz, onDone) {
+    const box = document.getElementById("quizBox");
+    box.innerHTML = `
+      <h2>確認クイズ</h2>
+      <p class="lead">動画の内容をおさらいしましょう（全${quiz.length}問）。</p>
+      <div id="qlist"></div>
+      <div class="quiz-result" id="quizResult" style="display:none;"></div>
+      <div class="quiz-actions">
+        <button id="quizSubmit">答え合わせ</button>
+        <button id="quizNext" style="display:none;">次へ ▶</button>
+      </div>`;
+    const list = document.getElementById("qlist");
+    list.innerHTML = quiz.map((q, qi) => {
+      const choices = q.choices.map((ch, ci) => `
+        <label class="choice" id="c_${qi}_${ci}">
+          <input type="radio" name="q_${qi}" value="${ci}">
+          <span>${esc(ch)}</span>
+        </label>`).join("");
+      return `
+        <div class="qblock" data-answer="${q.answer}">
+          <div class="qtext">Q${qi + 1}. ${esc(q.q)}</div>
+          ${choices}
+          <div class="qexplain" id="ex_${qi}"></div>
+        </div>`;
+    }).join("");
+    document.getElementById("quizOverlay").classList.add("show");
+
+    document.getElementById("quizSubmit").onclick = () => {
+      // 全問回答チェック
+      for (let qi = 0; qi < quiz.length; qi++) {
+        if (!document.querySelector(`input[name="q_${qi}"]:checked`)) {
+          alert("すべての問題に答えてください。");
+          return;
+        }
+      }
+      let correct = 0;
+      quiz.forEach((q, qi) => {
+        const sel = parseInt(document.querySelector(`input[name="q_${qi}"]:checked`).value, 10);
+        if (sel === q.answer) correct++;
+        q.choices.forEach((ch, ci) => {
+          const el = document.getElementById(`c_${qi}_${ci}`);
+          el.querySelector("input").disabled = true;
+          if (ci === q.answer) el.classList.add("correct");
+          else if (ci === sel) el.classList.add("wrong");
+        });
+      });
+      const resEl = document.getElementById("quizResult");
+      resEl.style.display = "block";
+      resEl.textContent = `${quiz.length}問中 ${correct}問 正解！`;
+      resEl.style.color = correct === quiz.length ? "#2f6b2c" : "var(--accent)";
+      recordQuiz(item, correct, quiz.length);
+      document.getElementById("quizSubmit").style.display = "none";
+      document.getElementById("quizNext").style.display = "block";
+    };
+    document.getElementById("quizNext").onclick = () => {
+      document.getElementById("quizOverlay").classList.remove("show");
+      if (onDone) onDone();
+    };
+  }
+
+  function recordQuiz(item, correct, total) {
+    const trainee = getTrainee();
+    if (!trainee || !trainee.key) return;
+    const cKey = titleKeyOf(item.title);
+    const local = loadLocalProgress(trainee.key + "/" + cKey) || {};
+    // validateがname+watchedSecondsを要求するので併せて送る
+    db.ref("progress/" + trainee.key + "/" + cKey).update({
+      name: trainee.name,
+      title: (item.title || "").replace(/\n/g, " "),
+      type: "mp4",
+      watchedSeconds: Math.round(local.watched || 0),
+      quizCorrect: correct,
+      quizTotal: total,
+      quizAt: Date.now(),
+    }).catch(() => {});
+  }
+
   function block(message) {
     if (countdownInterval) clearInterval(countdownInterval);
     stopTracking(); // 視聴終了時に記録を確定
@@ -308,6 +474,8 @@
       session.positions[session.currentIndex] = videoEl.currentTime;
       saveSession(session);
     });
+    // 見終わったら確認クイズ → セットなら自動で次のコンテンツへ
+    videoEl.addEventListener("ended", () => onVideoEnded(item), { once: true });
   }
 
   function renderGameInto(mainArea, item, wrap) {
@@ -349,6 +517,7 @@
     if (!session) return;
 
     stopPlayback();
+    document.getElementById("quizOverlay").classList.remove("show"); // 切替時にクイズ/完了パネルを閉じる
 
     const item = session.items[session.currentIndex];
     const wrap = document.getElementById("content");
@@ -435,11 +604,12 @@
       return;
     }
 
-    renderCurrentItem();
-
-    if (session.viewExpiresAt) {
-      startCountdown(session.viewExpiresAt);
-    }
+    // コンテンツ情報を読み込んでから、セット順を整えて表示
+    loadContentMap().then(() => {
+      const s = sortSessionByOrder(getSession()) || session;
+      renderCurrentItem();
+      if (s.viewExpiresAt) startCountdown(s.viewExpiresAt);
+    });
   }
 
   // タブ復帰・再読み込み時も、時間切れかどうかを都度チェックする
