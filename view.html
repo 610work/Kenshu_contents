@@ -172,7 +172,9 @@
   function saveLocalProgress(k, rec) {
     try {
       const all = JSON.parse(localStorage.getItem("progressLocal") || "{}");
-      all[k] = rec; localStorage.setItem("progressLocal", JSON.stringify(all));
+      // マージ保存：視聴時間の定期保存がゲーム成績などの他フィールドを消さないように
+      all[k] = Object.assign({}, all[k] || {}, rec);
+      localStorage.setItem("progressLocal", JSON.stringify(all));
     } catch (e) {}
   }
 
@@ -251,6 +253,50 @@
   window.addEventListener("pagehide", () => flushProgress(true));
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") flushProgress(true);
+  });
+
+  // ===== ゲームからの成績通知を進捗に記録（ベストスコアを保持） =====
+  window.addEventListener("message", (ev) => {
+    // ゲームは非公開ストレージ（署名付きURL）から配信される。localhostはローカル動作確認用
+    const okOrigin = ev.origin === "https://firebasestorage.googleapis.com"
+      || ev.origin.startsWith("http://localhost");
+    if (!okOrigin) return;
+    const d = ev.data || {};
+    if (d.type !== "kenshuGameScore") return;
+    const score = Number(d.score);
+    const total = (d.total === null || d.total === undefined) ? null : Number(d.total);
+    const missesN = (d.misses === null || d.misses === undefined) ? null : Number(d.misses);
+    if (!isFinite(score) || score < 0 || score > 100000) return;
+    if (total !== null && (!isFinite(total) || total <= 0 || total > 100000)) return;
+
+    const trainee = getTrainee();
+    const session = getSession();
+    if (!trainee || !trainee.key || !session) return;
+    const item = session.items[session.currentIndex];
+    if (!item || item.type !== "game") return;
+
+    const cKey = titleKeyOf(item.title);
+    const storeKey = trainee.key + "/" + cKey;
+    const prev = loadLocalProgress(storeKey) || {};
+    // ベスト判定：満点数ありは正答率で、無し（エンドレス等）は件数→ミス少で比較
+    let better = true;
+    if (prev.gameScore !== undefined && prev.gameScore !== null) {
+      if (total && prev.gameTotal) better = (score / total) >= (prev.gameScore / prev.gameTotal);
+      else better = score > prev.gameScore || (score === prev.gameScore && (missesN || 0) <= (prev.gameMisses || 0));
+    }
+    if (!better) return;
+
+    saveLocalProgress(storeKey, { gameScore: score, gameTotal: total, gameMisses: missesN });
+    db.ref("progress/" + trainee.key + "/" + cKey).update({
+      name: trainee.name,
+      title: (item.title || "").replace(/\n/g, " "),
+      type: "game",
+      watchedSeconds: Math.round(prev.watched || 0),
+      gameScore: score,
+      gameTotal: total,
+      gameMisses: missesN,
+      gameAt: Date.now(),
+    }).catch(() => {});
   });
 
   // ===== コンテンツ情報（並び順・確認クイズ）の読み込み =====
@@ -560,6 +606,17 @@
         } else if (frameEl && frameEl.webkitRequestFullscreen) {
           frameEl.webkitRequestFullscreen();
         }
+      });
+    }
+
+    // ゲーム側に研修生名を渡す（ランキングの名前欄プリフィル用）
+    const gi = document.getElementById("gameIframe");
+    if (gi) {
+      gi.addEventListener("load", () => {
+        try {
+          const t = getTrainee();
+          gi.contentWindow.postMessage({ type: "kenshuTrainee", name: (t && t.name) || "" }, "*");
+        } catch (e) {}
       });
     }
   }
