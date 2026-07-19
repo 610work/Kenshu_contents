@@ -51,6 +51,8 @@
     background:rgba(47,107,44,0.92);color:#fff;font-size:11px;font-weight:600;
     padding:2px 8px;border-radius:10px;letter-spacing:.02em;
   }
+  .viewed-tag.partial{background:rgba(181,133,42,0.92);}
+  .viewed-tag.score{background:rgba(59,110,165,0.92);}
   .tab-count{
     display:inline-block;min-width:18px;padding:0 5px;margin-left:2px;
     background:rgba(0,0,0,0.12);border-radius:999px;font-size:11px;line-height:16px;
@@ -257,7 +259,33 @@
     catch (e) { return []; }
   }
 
+  // view.html と同じタイトル正規化キー（progressLocal の照合用）
+  function titleKeyOf(title) {
+    const k = String(title || "").normalize("NFKC").replace(/\s+/g, "")
+      .toLowerCase().replace(/[.#$\[\]\/]/g, "_").slice(0, 180);
+    return k || "untitled";
+  }
+
   function viewedBadgeHtml(item) {
+    // この端末に視聴記録（view.htmlが保存するprogressLocal）があれば、
+    // 実際の進捗（動画は視聴率・ゲームはベストスコア）を優先して表示する
+    const t = getTrainee();
+    if (t && item.category !== "set") {
+      try {
+        const all = JSON.parse(localStorage.getItem("progressLocal") || "{}");
+        const rec = all[t.key + "/" + titleKeyOf(item.data.title)];
+        if (rec) {
+          if (item.category === "video" && rec.duration) {
+            const pct = Math.min(100, Math.round((rec.watched || 0) / rec.duration * 100));
+            if (pct >= 90) return `<span class="viewed-tag">✓ 視聴済み</span>`;
+            if (pct >= 3) return `<span class="viewed-tag partial">▶ 視聴中 ${pct}%</span>`;
+          }
+          if (item.category === "game" && rec.gameScore !== undefined && rec.gameScore !== null) {
+            return `<span class="viewed-tag score">🎮 ベスト ${rec.gameScore}${rec.gameTotal ? "/" + rec.gameTotal : "件"}</span>`;
+          }
+        }
+      } catch (e) { /* 記録が壊れていても一覧表示は続行 */ }
+    }
     return getViewedTargets().includes(item.targetKey)
       ? `<span class="viewed-tag">✓ 視聴済み</span>` : "";
   }
